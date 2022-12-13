@@ -1,0 +1,570 @@
+---
+title: "AGR 532 Phenology Project"
+author: "Erica Kirchhof"
+date: "2022-12-02"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r Importing and Cleaning Phenology Data Files}
+library("readxl")
+PSC.AR <- read_excel("AGR_532_Phenology_Project.xlsx", sheet = "PSC")
+HF.All <- read_excel("AGR_532_Phenology_Project.xlsx", sheet = "HF")
+HF.All <- subset(HF.All, select = c("date", "doy", "tree.id", "bcon", "fbud", "fopn"))
+HF.All$tree.id <- gsub('ACRU-01', 'ACRU', HF.All$tree.id)
+HF.All$tree.id <- gsub('ACRU-02', 'ACRU', HF.All$tree.id)
+HF.All$tree.id <- gsub('ACRU-03', 'ACRU', HF.All$tree.id)
+HF.All$tree.id <- gsub('ACRU-04', 'ACRU', HF.All$tree.id)
+HF.All$tree.id <- gsub('ACRU-05', 'ACRU', HF.All$tree.id)
+HF.All$year <- format(as.Date(HF.All$date, format = "%Y-%m-%d"), "%Y")
+HF.AR <- subset(HF.All, tree.id %in% "ACRU")
+HF.AR <- HF.AR[-c(1, 3:5)]
+HF.AR$year <- as.numeric(HF.AR$year)
+HF.AR$fopn <- as.numeric(HF.AR$fopn)
+HF.AR <- na.omit(HF.AR)
+HF.AR <- subset(HF.AR, fopn >= 50)
+HF.AR <- subset(HF.AR, fopn < 100)
+HF.AR <- HF.AR[-c(2)]
+HF.AR <- aggregate(HF.AR$doy, list(HF.AR$year), FUN = mean)
+names(HF.AR) <- c("year", "mean.bbdoy")
+HF.AR <- HF.AR[-c(1:2),]
+names(PSC.AR) <- c("year", "BBDOY")
+PSC.HF <- merge(HF.AR, PSC.AR, by = "year")
+names(PSC.HF) <- c("year", "HF.bbdoy", "PSC.bbdoy")
+```
+
+```{r Importing and Cleaning Climate Data Files}
+PSC.climate1 <- read.csv("https://www.ncei.noaa.gov/orders/cdo/3161612.csv")
+PSC.climate2 <- read.csv("https://www.ncei.noaa.gov/orders/cdo/3161619.csv")
+PSC.climate1$TAVG <- (PSC.climate1$TMAX+PSC.climate1$TMIN)/2
+PSC.climate2$TAVG <- (PSC.climate2$TMAX+PSC.climate2$TMIN)/2
+PSC.climate1 <- PSC.climate1[-c(1,2)]
+PSC.climate2 <- PSC.climate2[-c(1,2)]
+PSC.climate1$DATE <- as.Date(PSC.climate1$DATE, "%Y-%m-%d")
+PSC.climate2$DATE <- as.Date(PSC.climate2$DATE, "%Y-%m-%d")
+PSC.climate <- rbind(PSC.climate2, PSC.climate1)
+library("weathermetrics")
+PSC.climate$TAVG <- fahrenheit.to.celsius(PSC.climate$TAVG)
+PSC.climate$TMAX <- fahrenheit.to.celsius(PSC.climate$TMAX)
+PSC.climate$TMIN <- fahrenheit.to.celsius(PSC.climate$TMIN)
+HF.climate <- read.csv("https://harvardforest1.fas.harvard.edu/sites/harvardforest.fas.harvard.edu/files/data/p30/hf300/hf300-05-daily-m.csv")
+HF.climate <- HF.climate[-c(3,5,7:9)]
+HF.climate <- HF.climate[-c(1:12575),]
+HF.climate <- na.omit(HF.climate)
+PSC.climate <- na.omit(PSC.climate)
+HF.climate$date <- as.Date(HF.climate$date, format = "%Y-%m-%d", tz = "", usetz = FALSE)
+HF.climate$Month <- as.numeric(format(HF.climate$date, "%m"))
+HF.climate$SeasonYearStart <- ifelse(HF.climate$Month <= 6, as.numeric(format(HF.climate$date, "%Y")) - 1, as.numeric(format(HF.climate$date, "%Y")))
+HF.climate$SeasonYearEnd <- ifelse(HF.climate$Month <= 6, as.numeric(format(HF.climate$date, "%Y")), as.numeric(format(HF.climate$date, "%Y")) + 1)
+HF.climate$Year <- as.numeric(format(HF.climate$date, "%Y"))
+HF.climate$Day <- as.numeric(format(HF.climate$date, "%d"))
+PSC.climate$Month <- as.numeric(format(PSC.climate$DATE, "%m"))
+PSC.climate$SeasonYearStart <- ifelse(PSC.climate$Month <= 6, as.numeric(format(PSC.climate$DATE, "%Y")) - 1, as.numeric(format(PSC.climate$DATE, "%Y")))
+PSC.climate$SeasonYearEnd <- ifelse(PSC.climate$Month <= 6, as.numeric(format(PSC.climate$DATE, "%Y")), as.numeric(format(PSC.climate$DATE, "%Y")) + 1)
+PSC.climate$Year <- as.numeric(format(PSC.climate$DATE, "%Y"))
+PSC.climate$Day <- as.numeric(format(PSC.climate$DATE, "%d"))
+```
+
+```{r Modeling Hourly Temperatures From Daily Max/Min}
+library("chillR")
+names(HF.climate)[c(3,4)] <- c("Tmax","Tmin")
+HF.climatehourly <- make_hourly_temps(latitude = +42.53311, HF.climate, keep_sunrise_sunset = F)
+HF.Hclimate <- data.frame(HF.climatehourly[1:10], stack(HF.climatehourly[11:34]))
+names(HF.Hclimate)[c(11,12)] <- c("temp", "hour")
+names(PSC.climate)[c(3,4)] <- c("Tmax", "Tmin")
+PSC.climatehourly <- make_hourly_temps(latitude = +44.4375, PSC.climate, keep_sunrise_sunset = F)
+PSC.Hclimate <- data.frame(PSC.climatehourly[1:10], stack(PSC.climatehourly[11:34]))
+names(PSC.Hclimate)[c(11,12)] <- c("temp", "hour")
+HF.Hclimate$hour <- gsub("Hour_0","00.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_1","01.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_2","02.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_3","03.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_4","04.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_5","05.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_6","06.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_7","07.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_8","08.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_9","09.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_10","10.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_11", "11.00", HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_12","12.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_13","13.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_14","14.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_15","15.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_16","16.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_17","17.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_18","18.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_19","19.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_20","20.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_21","21.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_22","22.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("Hour_23","23.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.000","10.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.001", "11.00", HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.002","12.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.003","13.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.004","14.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.005","15.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.006","16.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.007","17.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.008","18.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("01.009","19.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("02.000","20.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("02.001","21.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("02.002","22.00",HF.Hclimate$hour)
+HF.Hclimate$hour <- gsub("02.003","23.00",HF.Hclimate$hour)
+HF.Hclimate$timedate <- as.POSIXct(paste(as.character(HF.Hclimate$date), as.character(HF.Hclimate$hour)), tz = "", "%Y-%m-%d %H.%M")
+library("tidyverse")
+HF.Hclimate <- HF.Hclimate %>% arrange(timedate)
+PSC.Hclimate$hour <- gsub("Hour_0","00.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_1","01.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_2","02.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_3","03.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_4","04.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_5","05.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_6","06.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_7","07.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_8","08.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_9","09.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_10","10.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_11", "11.00", PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_12","12.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_13","13.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_14","14.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_15","15.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_16","16.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_17","17.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_18","18.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_19","19.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_20","20.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_21","21.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_22","22.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("Hour_23","23.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.000","10.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.001", "11.00", PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.002","12.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.003","13.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.004","14.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.005","15.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.006","16.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.007","17.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.008","18.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("01.009","19.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("02.000","20.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("02.001","21.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("02.002","22.00",PSC.Hclimate$hour)
+PSC.Hclimate$hour <- gsub("02.003","23.00",PSC.Hclimate$hour)
+PSC.Hclimate$timedate <- as.POSIXct(paste(as.character(PSC.Hclimate$DATE), as.character(PSC.Hclimate$hour)), tz = "", "%Y-%m-%d %H.%M")
+PSC.Hclimate <- PSC.Hclimate %>% arrange(timedate)
+HF.Hclimate$hour <- as.numeric(HF.Hclimate$hour)
+PSC.Hclimate$hour <- as.numeric(PSC.Hclimate$hour)
+```
+
+```{r Calcuate Growing Degree Days From January to June, Diff Base Temps}
+HF.TGDD0 <- NULL
+for (i in 1998:2021) {
+  HF.JJGDDsub <- subset(HF.JJGDD, SeasonYearEnd %in% i)
+  HF.JJGDDsub$GDD0 <- 0
+  HF.JJGDDsub$GDD0[HF.JJGDDsub$temp >= 0]=HF.JJGDDsub$temp[HF.JJGDDsub$temp >= 0] - 0
+  HF.JJGDDsub$cGDD0 <- HF.JJGDDsub$GDD0
+  row.names(HF.JJGDDsub) <- NULL
+  nrow(HF.JJGDDsub)
+  for (j in 2:nrow(HF.JJGDDsub)) {
+    HF.JJGDDsub$cGDD0[j] = HF.JJGDDsub$cGDD0[j-1]+HF.JJGDDsub$GDD0[j]
+  }
+  HF.TGDD0 <- rbind(HF.TGDD0, HF.JJGDDsub)
+}
+HF.TGDD5 <- NULL
+for (i in 1998:2021) {
+  HF.JJGDDsub <- subset(HF.JJGDD, SeasonYearEnd %in% i)
+  HF.JJGDDsub$GDD5 <- 0
+  HF.JJGDDsub$GDD5[HF.JJGDDsub$temp >= 5]=HF.JJGDDsub$temp[HF.JJGDDsub$temp >= 5] - 5
+  HF.JJGDDsub$cGDD5 <- HF.JJGDDsub$GDD5
+  row.names(HF.JJGDDsub) <- NULL
+  nrow(HF.JJGDDsub)
+  for (j in 2:nrow(HF.JJGDDsub)) {
+    HF.JJGDDsub$cGDD5[j] = HF.JJGDDsub$cGDD5[j-1]+HF.JJGDDsub$GDD5[j]
+  }
+  HF.TGDD5 <- rbind(HF.TGDD5, HF.JJGDDsub)
+}
+HF.TGDD10 <- NULL
+for (i in 1998:2021) {
+  HF.JJGDDsub <- subset(HF.JJGDD, SeasonYearEnd %in% i)
+  HF.JJGDDsub$GDD10 <- 0
+  HF.JJGDDsub$GDD10[HF.JJGDDsub$temp >= 10]=HF.JJGDDsub$temp[HF.JJGDDsub$temp >= 10] - 10
+  HF.JJGDDsub$cGDD10 <- HF.JJGDDsub$GDD10
+  row.names(HF.JJGDDsub) <- NULL
+  nrow(HF.JJGDDsub)
+  for (j in 2:nrow(HF.JJGDDsub)) {
+    HF.JJGDDsub$cGDD10[j] = HF.JJGDDsub$cGDD10[j-1]+HF.JJGDDsub$GDD10[j]
+  }
+  HF.TGDD10 <- rbind(HF.TGDD10, HF.JJGDDsub)
+}
+HF.JJGDD$cGDD0 <- HF.TGDD0$cGDD0
+HF.JJGDD$cGDD5 <- HF.TGDD5$cGDD5
+HF.JJGDD$cGDD10 <- HF.TGDD10$cGDD10
+HF.JJGDD0daily <- aggregate(cGDD0~date, HF.JJGDD, mean)
+HF.JJGDD5daily <- aggregate(cGDD5~date, HF.JJGDD, mean)
+HF.JJGDD10daily <- aggregate(cGDD10~date, HF.JJGDD, mean)
+HF.JJGDDdaily <- data.frame(HF.JJGDD0daily)
+HF.JJGDDdaily$cGDD5 <- HF.JJGDD5daily$cGDD5
+HF.JJGDDdaily$cGDD10 <- HF.JJGDD10daily$cGDD10
+PSC.JJGDD <- subset(PSC.Hclimate, Month %in% c(1,2,3,4,5,6))
+PSC.TGDD0 <- NULL
+for (i in 1998:2021) {
+  PSC.JJGDDsub <- subset(PSC.JJGDD, SeasonYearEnd %in% i)
+  PSC.JJGDDsub$GDD0 <- 0
+  PSC.JJGDDsub$GDD0[PSC.JJGDDsub$temp >= 0]=PSC.JJGDDsub$temp[PSC.JJGDDsub$temp >= 0] - 0
+  PSC.JJGDDsub$cGDD0 <- PSC.JJGDDsub$GDD0
+  row.names(PSC.JJGDDsub) <- NULL
+  nrow(PSC.JJGDDsub)
+  for (j in 2:nrow(PSC.JJGDDsub)) {
+    PSC.JJGDDsub$cGDD0[j] = PSC.JJGDDsub$cGDD0[j-1]+PSC.JJGDDsub$GDD0[j]
+  }
+  PSC.TGDD0 <- rbind(PSC.TGDD0, PSC.JJGDDsub)
+}
+PSC.TGDD5 <- NULL
+for (i in 1998:2021) {
+  PSC.JJGDDsub <- subset(PSC.JJGDD, SeasonYearEnd %in% i)
+  PSC.JJGDDsub$GDD5 <- 0
+  PSC.JJGDDsub$GDD5[PSC.JJGDDsub$temp >= 5]=PSC.JJGDDsub$temp[PSC.JJGDDsub$temp >= 5] - 5
+  PSC.JJGDDsub$cGDD5 <- PSC.JJGDDsub$GDD5
+  row.names(PSC.JJGDDsub) <- NULL
+  nrow(PSC.JJGDDsub)
+  for (j in 2:nrow(PSC.JJGDDsub)) {
+    PSC.JJGDDsub$cGDD5[j] = PSC.JJGDDsub$cGDD5[j-1]+PSC.JJGDDsub$GDD5[j]
+  }
+  PSC.TGDD5 <- rbind(PSC.TGDD5, PSC.JJGDDsub)
+}
+PSC.TGDD10 <- NULL
+for (i in 1998:2021) {
+  PSC.JJGDDsub <- subset(PSC.JJGDD, SeasonYearEnd %in% i)
+  PSC.JJGDDsub$GDD10 <- 0
+  PSC.JJGDDsub$GDD10[PSC.JJGDDsub$temp >= 10]=PSC.JJGDDsub$temp[PSC.JJGDDsub$temp >= 10] - 10
+  PSC.JJGDDsub$cGDD10 <- PSC.JJGDDsub$GDD10
+  row.names(PSC.JJGDDsub) <- NULL
+  nrow(PSC.JJGDDsub)
+  for (j in 2:nrow(PSC.JJGDDsub)) {
+    PSC.JJGDDsub$cGDD10[j] = PSC.JJGDDsub$cGDD10[j-1]+PSC.JJGDDsub$GDD10[j]
+  }
+  PSC.TGDD10 <- rbind(PSC.TGDD10, PSC.JJGDDsub)
+}
+PSC.JJGDD$cGDD0 <- PSC.TGDD0$cGDD0
+PSC.JJGDD$cGDD5 <- PSC.TGDD5$cGDD5
+PSC.JJGDD$cGDD10 <- PSC.TGDD10$cGDD10
+PSC.JJGDD0daily <- aggregate(cGDD0~DATE, PSC.JJGDD, mean)
+PSC.JJGDD5daily <- aggregate(cGDD5~DATE, PSC.JJGDD, mean)
+PSC.JJGDD10daily <- aggregate(cGDD10~DATE, PSC.JJGDD, mean)
+PSC.JJGDDdaily <- data.frame(PSC.JJGDD0daily)
+PSC.JJGDDdaily$cGDD5 <- PSC.JJGDD5daily$cGDD5
+PSC.JJGDDdaily$cGDD10 <- PSC.JJGDD10daily$cGDD10
+```
+
+```{r Calculating Chilling Units, Both Locations, 1 Nov - 31 March}
+HF.Hchill <- subset(HF.Hclimate, Month %in% c(11,12,1,2,3))
+HF.Hchill <- HF.Hchill %>% arrange(SeasonYearEnd)
+HF.MarCU <- NULL
+for (i in 1999:2022) {
+  HF.MarCUsub <- subset(HF.Hchill, SeasonYearEnd %in% i)
+  HF.MarCUsub$CU <- ifelse(HF.MarCUsub$temp >= -10 & HF.MarCUsub$temp <= 5, 1, 0)
+  HF.MarCUsub$cCU <- HF.MarCUsub$CU
+  for (j in 2:nrow(HF.MarCUsub)) {
+    HF.MarCUsub$cCU[j] <- HF.MarCUsub$cCU[j-1] + HF.MarCUsub$CU[j]
+  }
+  HF.MarCU <- rbind(HF.MarCU, HF.MarCUsub)
+}
+
+PSC.Hchill <- subset(PSC.Hclimate, Month %in% c(11,12,1,2,3))
+PSC.Hchill <- PSC.Hchill %>% arrange(SeasonYearEnd)
+PSC.MarCU <- NULL
+for (i in 1999:2022) {
+  PSC.MarCUsub <- subset(PSC.Hchill, SeasonYearEnd %in% i)
+  PSC.MarCUsub$CU <- ifelse(PSC.MarCUsub$temp >= -10 & PSC.MarCUsub$temp <= 5, 1, 0)
+  PSC.MarCUsub$cCU <- PSC.MarCUsub$CU
+  for (j in 2:nrow(PSC.MarCUsub)) {
+    PSC.MarCUsub$cCU[j] <- PSC.MarCUsub$cCU[j-1] + PSC.MarCUsub$CU[j]
+  }
+  PSC.MarCU <- rbind(PSC.MarCU, PSC.MarCUsub)
+}
+```
+
+```{r Separate Growing Seasons into Calibration (70%) & Validation (30%) Sets}
+seasonyears <- c(1998, 1999, 2001, 2002, 2004, 2006, 2007, 2009, 2010, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2020, 2021)
+calibration <- sample(seasonyears, 12)
+calibration
+Calibration <- data.frame(calibration)
+Calibration <- Calibration %>% arrange(calibration)
+names(Calibration)[1] <- "year"
+validation <- c(1998,2002,2004,2012,2017,2021)
+Validation <- data.frame(validation)
+names(Validation)[1] <- "year"
+```
+
+```{r Formatting Calibration Datasets, Harvard Forest}
+Calibration$HF.bbdoy <- subset(HF.AR, year %in% calibration)
+Calibration$PSC.bbdoy <- subset(PSC.AR, year %in% calibration)
+Validation$HF.bbdoy <- subset(HF.AR, year %in% validation)
+Validation$PSC.bbdoy <- subset(PSC.AR, year %in% validation)
+HF.HGDDchill <- data.frame(HF.MarCU)
+HF.HGDDchill$date <- NULL
+HF.HGDDchill$Tmax <- NULL
+HF.HGDDchill$Tmin <- NULL
+HF.HGDDchill$Month <- NULL
+HF.HGDDchill$SeasonYearStart <- NULL
+HF.HGDDchill$Year <- NULL
+HF.HGDDchill$Day <- NULL
+HF.HGDDchill$temp <- NULL
+HF.HGDDchill$hour <- NULL
+HF.HGDDchill$timedate <- NULL
+HF.HGDDchill$March15 <- NULL
+HF.HGDDchill$airt <- NULL
+HF.HGDDchillyr <- aggregate(.~JDay+SeasonYearEnd, HF.HGDDchill, mean)
+names(HF.HGDDchillyr)[1] <- "bb.doy"
+names(HF.HGDDchillyr)[2] <- "year"
+HF.JJGDDred <- data.frame(HF.JJGDD)
+HF.JJGDDred$date <- NULL
+HF.JJGDDred$Tmax <- NULL
+HF.JJGDDred$Tmin <- NULL
+HF.JJGDDred$Month <- NULL
+HF.JJGDDred$SeasonYearStart <- NULL
+HF.JJGDDred$Year <- NULL
+HF.JJGDDred$Day <- NULL
+HF.JJGDDred$temp <- NULL
+HF.JJGDDred$hour <- NULL
+HF.JJGDDred$timedate <- NULL
+HF.JJGDDred$airt <- NULL
+names(HF.JJGDDred)[1] <- "year"
+names(HF.JJGDDred)[2] <- "bb.doy"
+HF.JJGDDredyr <- aggregate(.~bb.doy+year, HF.JJGDDred, mean)
+HF.ARCal <- subset(HF.AR, year %in% calibration)
+HF.ARCal$bb.doy <- round(HF.ARCal$mean.bbdoy, 0)
+PSC.ARCal <- subset(HF.AR, year %in% calibration)
+PSC.ARCal$bb.doy <- round(PSC.ARCal$mean.bbdoy, 0)
+HF.CalJJGDD <- merge(HF.ARCal, HF.JJGDDredyr)
+HF.CalJJGDD$cCU <- c(2629.92, 2751.88, 2629.13, 2279.13, 2453.75, 2460.00, 2902.92, 2423.5, 2434.58,2308.13, 2550.25, 2863.58)
+HF.CalFinal <- data.frame(HF.CalJJGDD)
+```
+
+```{r Developing Linear Models Based on Calibration Set, Harvard Forest}
+HFModel.GDD0 <- lm(cGDD0~cCU, data = HF.CalFinal)
+HFModel.GDD5 <- lm(cGDD5~cCU, data = HF.CalFinal)
+HFModel.GDD10 <- lm(cGDD10~cCU, data = HF.CalFinal)
+HF.Model.bbdoy0 <- lm(bb.doy~cGDD0, data = HF.CalFinal)
+HF.Model.bbdoy5 <- lm(bb.doy~cGDD5, data = HF.CalFinal)
+HF.Model.bbdoy10 <- lm(bb.doy~cGDD10, data = HF.CalFinal)
+```
+
+```{r Validating Linear Models and Predicting Budbreak, Harvard Forest}
+HF.Val <- subset(HF.AR, year %in% validation)
+HF.Val$bb.doy <- round(HF.Val$mean.bbdoy, 0)
+HF.Val$mean.bbdoy <- NULL
+HF.Val$cCU <- c(2629.92, 2687.21, 2440.5, 2389.75, 2664.5, 2694.25)
+HF.GDD0Preds <- predict(HFModel.GDD0, newdata = HF.Val)
+HF.Val$cGDD0pred <- HF.GDD0Preds
+HF.GDD5Preds <- predict(HFModel.GDD5, newdata = HF.Val)
+HF.Val$cGDD5pred <- HF.GDD5Preds
+HF.GDD10Preds <- predict(HFModel.GDD10, newdata = HF.Val)
+HF.Val$cGDD10pred <- HF.GDD10Preds
+names(HF.Val)[c(4,5,6,14)] <- c("cGDD0x", "cGDD5", "cGDD10", "cGDD0")
+HFbb.doy0pred.dynamic <- predict(HF.Model.bbdoy0, newdata = HF.Val)
+HF.Val$bbdoy0pred.dynamic <- HFbb.doy0pred.dynamic
+HFbb.doy5pred <- predict(HF.Model.bbdoy5, newdata = HF.Val)
+HF.Val$bbdoy5pred <- HFbb.doy5pred
+HFbb.doy10pred <- predict(HF.Model.bbdoy10, newdata = HF.Val)
+HF.Val$bbdoy10pred <- HFbb.doy10pred
+```
+
+```{r Formatting Calibration Datasets, PSC}
+PSC.HGDDchill <- data.frame(PSC.MarCU)
+PSC.HGDDchill$DATE <- NULL
+PSC.HGDDchill$TAVG <- NULL
+PSC.HGDDchill$Tmax <- NULL
+PSC.HGDDchill$Tmin <- NULL
+PSC.HGDDchill$Month <- NULL
+PSC.HGDDchill$SeasonYearStart <- NULL
+PSC.HGDDchill$Year <- NULL
+PSC.HGDDchill$Day <- NULL
+PSC.HGDDchill$temp <- NULL
+PSC.HGDDchill$hour <- NULL
+PSC.HGDDchill$timedate <- NULL
+PSC.HGDDchill$March15 <- NULL
+PSC.HGDDchill$airt <- NULL
+PSC.HGDDchillyr <- aggregate(.~JDay+SeasonYearEnd, PSC.HGDDchill, mean)
+names(PSC.HGDDchillyr)[1] <- "bb.doy"
+names(PSC.HGDDchillyr)[2] <- "year"
+PSC.JJGDDred <- data.frame(PSC.JJGDD)
+PSC.JJGDDred$DATE <- NULL
+PSC.JJGDDred$TAVG <- NULL
+PSC.JJGDDred$Tmax <- NULL
+PSC.JJGDDred$Tmin <- NULL
+PSC.JJGDDred$Month <- NULL
+PSC.JJGDDred$SeasonYearStart <- NULL
+PSC.JJGDDred$Year <- NULL
+PSC.JJGDDred$Day <- NULL
+PSC.JJGDDred$temp <- NULL
+PSC.JJGDDred$hour <- NULL
+PSC.JJGDDred$timedate <- NULL
+PSC.JJGDDred$airt <- NULL
+names(PSC.JJGDDred)[1] <- "year"
+names(PSC.JJGDDred)[2] <- "bb.doy"
+PSC.JJGDDredyr <- aggregate(.~bb.doy+year, PSC.JJGDDred, mean)
+names(PSC.AR)[2] <- "bb.doy"
+PSC.ARCal <- subset(PSC.AR, year %in% calibration)
+PSC.CalJJGDD <- merge(PSC.ARCal, PSC.JJGDDredyr)
+PSC.CalJJGDD$cCU <- c(2229.08, 1976.5, 2207.88, 2032.58, 1936.42, 2271.42, 2390.58, 1836.5, 1764.13, 2296.00, 2218.42, 2463.58)
+PSC.CalFinal <- data.frame(PSC.CalJJGDD)
+```
+
+```{r Developing Linear Models Based on Calibration Set, PSC}
+PSCModel.GDD0 <- lm(cGDD0~cCU, data = PSC.CalFinal)
+PSCModel.GDD5 <- lm(cGDD5~cCU, data = PSC.CalFinal)
+PSCModel.GDD10 <- lm(cGDD10~cCU, data = PSC.CalFinal)
+PSC.Model.bbdoy0 <- lm(bb.doy~cGDD0, data = PSC.CalFinal)
+PSC.Model.bbdoy5 <- lm(bb.doy~cGDD5, data = PSC.CalFinal)
+PSC.Model.bbdoy10 <- lm(bb.doy~cGDD10, data = PSC.CalFinal)
+```
+
+```{r Validating Models, PSC}
+PSC.Val <- subset(PSC.AR, year %in% validation)
+PSC.Val$cCU <- c(2229.08, 2393.92, 1836.58, 2284.58, 2287.5, 2197.25)
+PSC.GDD0Preds <- predict(PSCModel.GDD0, newdata = PSC.Val)
+PSC.Val$cGDD0pred <- PSC.GDD0Preds
+PSC.GDD5Preds <- predict(PSCModel.GDD5, newdata = PSC.Val)
+PSC.Val$cGDD5pred <- PSC.GDD5Preds
+PSC.GDD10Preds <- predict(PSCModel.GDD10, newdata = HF.Val)
+PSC.Val$cGDD10pred <- PSC.GDD10Preds
+names(PSC.Val)[c(4,5,6)] <- c("cGDD0", "cGDD5", "cGDD10")
+PSCbb.doy0pred <- predict(PSC.Model.bbdoy0, newdata = HF.Val)
+PSC.Val$bbdoy0pred <- PSCbb.doy0pred
+PSCbb.doy5pred <- predict(PSC.Model.bbdoy5, newdata = HF.Val)
+PSC.Val$bbdoy5pred <- PSCbb.doy5pred
+PSCbb.doy10pred <- predict(PSC.Model.bbdoy10, newdata = HF.Val)
+PSC.Val$bbdoy10pred <- PSCbb.doy10pred
+```
+
+
+```{r Relevant Figures}
+library("ggplot2")
+# Show Differences in time to bubdbreak for both locations #
+ggplot(PSC.HF, mapping = aes(x = year, y = HF.bbdoy)) +
+  geom_point(color = "red") +
+  geom_point(aes(x = year, y = PSC.bbdoy), color = "blue")+
+  theme_light()+
+  labs(title = "Observed DOY of Budbreak, 1999-2021",
+       x = "Year",
+       y = "DOY Budbreak")
+# Show Graph of Hourly Temperatures for a Given Day #
+HF.071202 <- HF.Hclimate[HF.Hclimate$date == "2002-07-12", ]
+ggplot(HF.071202, mapping = aes(x = hour, y = temp)) +
+  geom_point()+
+  theme_light()+
+  labs(title = "Hourly Temperatures, July 12, 2002, Harvard Forest",
+       x = "Hour",
+       y = "Temp(C)")+
+  theme(strip.background = element_rect(color="#CCCCCC"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.x = element_line(size=0.1,color="black"),
+        axis.line.y = element_line(size=0.1,color="black"),
+        axis.text = element_text(size=10, color="black"),
+        axis.ticks = element_line(size=0.1,color="black"),
+        axis.ticks.length = unit(0.2, 'lines'),
+        axis.text.x = element_text(angle=0,vjust=0, hjust=0.1))
+
+# Predicted Vs. Observed Budbreak, Harvard Forest, 3 Base Temps #
+ggplot(HF.Val, mapping = aes(x = bbdoy10pred, y = bb.doy))+
+  geom_point(color = "red")+
+  geom_point(aes(x = bbdoy5pred, y = bb.doy), color = "blue")+
+  geom_point(aes(x = bbdoy0pred, y = bb.doy))+
+  theme_light()+
+  geom_segment(aes(x = 88, xend = 113, y = 88, yend = 113))+
+  labs(title = "Observed vs. Predicted DOY Budbreak at 3 Base Temps, Harvard Forest", 
+       x = "Predicted DOY Budbreak",
+       y = "Observed DOY Budbreak")+
+  theme(strip.background = element_rect(color="#CCCCCC"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.x = element_line(size=0.1,color="black"),
+        axis.line.y = element_line(size=0.1,color="black"),
+        axis.text = element_text(size=10, color="black"),
+        axis.ticks = element_line(size=0.1,color="black"),
+        axis.ticks.length = unit(0.2, 'lines'),
+        axis.text.x = element_text(angle=0,vjust=0, hjust=0.1))
+HF.Valbias0 <- mean(HF.Val$bbdoy0pred-HF.Val$bb.doy)
+HF.Valrmse0 <- sqrt(mean((HF.Val$bbdoy0pred-HF.Val$bb.doy)^2))
+HF.Valcor0 <- cor(HF.Val$bbdoy0pred, HF.Val$bb.doy)
+HF.Valbias5 <- mean(HF.Val$bbdoy5pred-HF.Val$bb.doy)
+HF.Valrmse5 <- sqrt(mean((HF.Val$bbdoy5pred-HF.Val$bb.doy)^2))
+HF.Valcor05<- cor(HF.Val$bbdoy5pred, HF.Val$bb.doy)
+HF.Valbias10 <- mean(HF.Val$bbdoy10pred-HF.Val$bb.doy)
+HF.Valrmse10 <- sqrt(mean((HF.Val$bbdoy10pred-HF.Val$bb.doy)^2))
+HF.Valcor10 <- cor(HF.Val$bbdoy10pred, HF.Val$bb.doy)
+
+# Predicted vs. Observed Budbreak, Paul Smiths, 3 Base Temps #
+ggplot(PSC.Val, mapping = aes(x = bbdoy10pred, y = bb.doy))+
+  geom_point(color = "red")+
+  geom_point(aes(x = bbdoy5pred, y = bb.doy), color = "blue")+
+  geom_point(aes(x = bbdoy0pred, y = bb.doy))+
+  theme_light()+
+  geom_segment(aes(x = 87, xend = 129, y = 87, yend = 129))+
+  labs(title = "Observed vs. Predicted DOY Budbreak at 3 Base Temps, Paul Smith's College", 
+       x = "Predicted DOY Budbreak",
+       y = "Observed DOY Budbreak")+
+  theme(strip.background = element_rect(color="#CCCCCC"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.x = element_line(size=0.1,color="black"),
+        axis.line.y = element_line(size=0.1,color="black"),
+        axis.text = element_text(size=10, color="black"),
+        axis.ticks = element_line(size=0.1,color="black"),
+        axis.ticks.length = unit(0.2, 'lines'),
+        axis.text.x = element_text(angle=0,vjust=0, hjust=0.1))
+PSC.Valbias0 <- mean(PSC.Val$bbdoy0pred-PSC.Val$bb.doy)
+PSC.Valrmse0 <- sqrt(mean((PSC.Val$bbdoy0pred-PSC.Val$bb.doy)^2))
+PSC.Valcor0 <- cor(PSC.Val$bbdoy0pred, PSC.Val$bb.doy)
+PSC.Valbias5 <- mean(PSC.Val$bbdoy5pred-PSC.Val$bb.doy)
+PSC.Valrmse5 <- sqrt(mean((PSC.Val$bbdoy5pred-PSC.Val$bb.doy)^2))
+PSC.Valcor05<- cor(PSC.Val$bbdoy5pred, PSC.Val$bb.doy)
+PSC.Valbias10 <- mean(PSC.Val$bbdoy10pred-PSC.Val$bb.doy)
+PSC.Valrmse10 <- sqrt(mean((PSC.Val$bbdoy10pred-PSC.Val$bb.doy)^2))
+PSC.Valcor10 <- cor(PSC.Val$bbdoy10pred, PSC.Val$bb.doy)
+
+# Plot Best Model, PSC #
+ggplot(PSC.Val, mapping = aes(x = bbdoy10pred, y = bb.doy))+
+  geom_point(color = "red")+
+  theme_light()+
+  geom_segment(aes(x = 87, xend = 129, y = 87, yend = 129))+
+  labs(title = "Observed vs. Predicted DOY Budbreak at Base Temp 10, Paul Smith's College", 
+       x = "Predicted DOY Budbreak",
+       y = "Observed DOY Budbreak")
+
+# Plot Best Model, HF #
+ggplot(HF.Val, mapping = aes(x = bbdoy0pred, y = bb.doy))+
+  geom_point()+
+  theme_light()+
+  geom_segment(aes(x = 87, xend = 113, y = 87, yend = 113))+
+  labs(title = "Observed vs. Predicted DOY Budbreak at Base Temp 0, Harvard Forest", 
+       x = "Predicted DOY Budbreak",
+       y = "Observed DOY Budbreak")
+
+# Using "Best" Model, Compare Predicted DOY Budbreak between Locations #
+ggplot(PSC.Val, mapping = aes(x = year, y = bbdoy10pred))+
+  geom_point(color = "red")+
+  geom_point(aes(x = HF.Val$year, y = HF.Val$bbdoy0pred))+
+  theme_light()+
+  labs(title = "Predicted DOY Budbreak, HF & PSC", 
+       x = "Year", y = "Predicted DOY Budbreak")+
+  theme(strip.background = element_rect(color="#CCCCCC"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+        axis.line.x = element_line(size=0.1,color="black"),
+        axis.line.y = element_line(size=0.1,color="black"),
+        axis.text = element_text(size=10, color="black"),
+        axis.ticks = element_line(size=0.1,color="black"),
+        axis.ticks.length = unit(0.2, 'lines'),
+        axis.text.x = element_text(angle=0,vjust=0, hjust=0.1))
+```
+
